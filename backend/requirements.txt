@@ -1,0 +1,10 @@
+fastapi
+uvicorn[standard]
+feedparser
+sqlalchemy
+google-generativeai
+tweepy
+apscheduler
+python-dotenv
+pydantic
+httpx
