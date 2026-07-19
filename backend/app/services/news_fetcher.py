@@ -1,6 +1,7 @@
 import feedparser
 from typing import List, Dict
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 RSS_FEEDS = {
     "global": [
@@ -15,6 +16,36 @@ RSS_FEEDS = {
         {"name": "Times of India", "url": "https://timesofindia.indiatimes.com/rssfeedstopstories.cms", "category": "india"},
         {"name": "India Today", "url": "https://www.indiatoday.in/rss/1206578", "category": "india"},
         {"name": "Economic Times", "url": "https://economictimes.indiatimes.com/rssfeedsdefault.cms", "category": "india"},
+    ],
+    "sports": [
+        {"name": "ESPN", "url": "https://www.espn.com/espn/rss/news", "category": "sports"},
+        {"name": "BBC Sport", "url": "http://feeds.bbci.co.uk/sport/rss.xml", "category": "sports"},
+        {"name": "Sky Sports", "url": "https://www.skysports.com/rss/12040", "category": "sports"},
+    ],
+    "science": [
+        {"name": "Science Daily", "url": "https://www.sciencedaily.com/rss/all.xml", "category": "science"},
+        {"name": "Phys.org", "url": "https://phys.org/rss-feed/", "category": "science"},
+        {"name": "New Scientist", "url": "https://www.newscientist.com/feed/home/", "category": "science"},
+    ],
+    "technology": [
+        {"name": "TechCrunch", "url": "https://techcrunch.com/feed/", "category": "technology"},
+        {"name": "The Verge", "url": "https://www.theverge.com/rss/index.xml", "category": "technology"},
+        {"name": "Ars Technica", "url": "http://feeds.arstechnica.com/arstechnica/index", "category": "technology"},
+    ],
+    "space": [
+        {"name": "NASA", "url": "https://www.nasa.gov/rss/dyn/breaking_news.rss", "category": "space"},
+        {"name": "Space.com", "url": "https://www.space.com/feeds/all", "category": "space"},
+        {"name": "SpaceNews", "url": "https://spacenews.com/feed/", "category": "space"},
+    ],
+    "ocean": [
+        {"name": "NOAA Ocean", "url": "https://oceanservice.noaa.gov/news/rss/", "category": "ocean"},
+        {"name": "Oceana", "url": "https://oceana.org/feed/", "category": "ocean"},
+        {"name": "Ocean Conservancy", "url": "https://oceanconservancy.org/feed/", "category": "ocean"},
+    ],
+    "facts": [
+        {"name": "IFLScience", "url": "https://www.iflscience.com/rss.xml", "category": "facts"},
+        {"name": "Interesting Engineering", "url": "https://interestingengineering.com/feed", "category": "facts"},
+        {"name": "Mental Floss", "url": "https://www.mentalfloss.com/rss.xml", "category": "facts"},
     ],
 }
 
@@ -52,17 +83,24 @@ def fetch_rss_feed(feed_info: Dict) -> List[Dict]:
 
 
 def fetch_all_news(category_filter: str = "all") -> List[Dict]:
-    """Fetch news from all configured RSS feeds."""
+    """Fetch news from all configured RSS feeds in parallel."""
     feeds_to_fetch = []
-    if category_filter in ("all", "global"):
-        feeds_to_fetch.extend(RSS_FEEDS["global"])
-    if category_filter in ("all", "india"):
-        feeds_to_fetch.extend(RSS_FEEDS["india"])
+    if category_filter == "all":
+        for feeds in RSS_FEEDS.values():
+            feeds_to_fetch.extend(feeds)
+    elif category_filter in RSS_FEEDS:
+        feeds_to_fetch.extend(RSS_FEEDS[category_filter])
 
     all_articles = []
-    for feed in feeds_to_fetch:
-        articles = fetch_rss_feed(feed)
-        all_articles.extend(articles)
-        print(f"[NewsFetcher] {feed['name']}: fetched {len(articles)} articles")
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(fetch_rss_feed, feed): feed for feed in feeds_to_fetch}
+        for future in as_completed(futures):
+            feed = futures[future]
+            try:
+                articles = future.result()
+                all_articles.extend(articles)
+                print(f"[NewsFetcher] {feed['name']}: fetched {len(articles)} articles")
+            except Exception as e:
+                print(f"[NewsFetcher] {feed['name']}: failed — {e}")
 
     return all_articles

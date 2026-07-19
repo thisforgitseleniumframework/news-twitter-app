@@ -4,6 +4,12 @@ const CATEGORIES = [
   { id: 'all', label: '🌐 All' },
   { id: 'india', label: '🇮🇳 India' },
   { id: 'global', label: '🌍 Global' },
+  { id: 'sports', label: '🏆 Sports' },
+  { id: 'science', label: '🔬 Science' },
+  { id: 'technology', label: '💻 Tech' },
+  { id: 'space', label: '🚀 Space' },
+  { id: 'ocean', label: '🌊 Ocean' },
+  { id: 'facts', label: '💡 Facts' },
 ];
 
 interface Props {
@@ -13,7 +19,7 @@ interface Props {
 
 export default function SourceFilter({ selected, onChange }: Props) {
   return (
-    <div className="flex gap-1">
+    <div className="flex flex-wrap gap-1">
       {CATEGORIES.map((cat) => (
         <button
           key={cat.id}

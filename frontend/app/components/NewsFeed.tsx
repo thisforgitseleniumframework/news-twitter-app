@@ -2,6 +2,28 @@
 
 import { NewsArticle } from '../types';
 
+const CATEGORY_STYLES: Record<string, string> = {
+  india:      'bg-orange-950 text-orange-400 border border-orange-800',
+  global:     'bg-blue-950 text-blue-400 border border-blue-800',
+  sports:     'bg-green-950 text-green-400 border border-green-800',
+  science:    'bg-purple-950 text-purple-400 border border-purple-800',
+  technology: 'bg-cyan-950 text-cyan-400 border border-cyan-800',
+  space:      'bg-indigo-950 text-indigo-400 border border-indigo-800',
+  ocean:      'bg-teal-950 text-teal-400 border border-teal-800',
+  facts:      'bg-yellow-950 text-yellow-400 border border-yellow-800',
+};
+
+const CATEGORY_LABELS: Record<string, string> = {
+  india:      '🇮🇳 India',
+  global:     '🌍 Global',
+  sports:     '🏆 Sports',
+  science:    '🔬 Science',
+  technology: '💻 Tech',
+  space:      '🚀 Space',
+  ocean:      '🌊 Ocean',
+  facts:      '💡 Facts',
+};
+
 interface Props {
   articles: NewsArticle[];
   onGenerateTweet: (id: number) => void;
@@ -33,12 +55,10 @@ export default function NewsFeed({ articles, onGenerateTweet, generatingId }: Pr
               <div className="flex items-center gap-2 mb-1.5">
                 <span
                   className={`text-xs px-2 py-0.5 rounded-full font-semibold ${
-                    article.category === 'india'
-                      ? 'bg-orange-950 text-orange-400 border border-orange-800'
-                      : 'bg-blue-950 text-blue-400 border border-blue-800'
+                    CATEGORY_STYLES[article.category] ?? 'bg-gray-800 text-gray-400 border border-gray-700'
                   }`}
                 >
-                  {article.category === 'india' ? '🇮🇳 India' : '🌍 Global'}
+                  {CATEGORY_LABELS[article.category] ?? article.category}
                 </span>
                 <span className="text-xs text-gray-500 truncate">{article.source}</span>
               </div>

@@ -4,7 +4,7 @@ export interface NewsArticle {
   summary: string | null;
   url: string;
   source: string;
-  category: 'india' | 'global';
+  category: 'india' | 'global' | 'sports' | 'science' | 'technology' | 'space' | 'ocean' | 'facts';
   published_at: string | null;
   fetched_at: string;
   is_processed: boolean;

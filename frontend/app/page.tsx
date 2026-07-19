@@ -86,7 +86,8 @@ export default function Home() {
       });
       if (res.ok) {
         showMessage('Tweet draft generated!');
-        if (tweetTab === 'draft') await loadDrafts('draft');
+        setTweetTab('draft');
+        await loadDrafts('draft');
         await loadStats();
         await loadArticles(categoryFilter);
       } else {
@@ -183,8 +184,8 @@ export default function Home() {
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
           {/* Left: News Feed (3/5) */}
           <div className="lg:col-span-3">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="font-semibold text-gray-200">
+            <div className="mb-3">
+              <h2 className="font-semibold text-gray-200 mb-2">
                 News Articles
                 <span className="ml-2 text-sm text-gray-500 font-normal">({articles.length})</span>
               </h2>

@@ -1,3 +1,10 @@
+import os
+import certifi
+
+# Fix Windows SSL certificate verification for all outbound HTTPS requests
+os.environ.setdefault("SSL_CERT_FILE", certifi.where())
+os.environ.setdefault("REQUESTS_CA_BUNDLE", certifi.where())
+
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends
 from fastapi.middleware.cors import CORSMiddleware
