@@ -1,24 +1,49 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { NewsArticle, TweetDraft, Stats } from './types';
 import NewsFeed from './components/NewsFeed';
 import TweetCard from './components/TweetCard';
 import SourceFilter from './components/SourceFilter';
+import AdvancedFilters, { FilterState } from './components/AdvancedFilters';
+import AnalyticsDashboard from './components/AnalyticsDashboard';
+import ThemeToggle from './components/ThemeToggle';
 
 const API_BASE = 'http://localhost:8000';
-const TWEET_TABS = ['draft', 'approved', 'posted', 'rejected'] as const;
+const WS_BASE = 'ws://localhost:8000';
+const TWEET_TABS = ['draft', 'approved', 'posted', 'rejected', 'scheduled'] as const;
 
 export default function Home() {
   const [articles, setArticles] = useState<NewsArticle[]>([]);
   const [drafts, setDrafts] = useState<TweetDraft[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
   const [categoryFilter, setCategoryFilter] = useState('all');
+  /** priority = breaking first (default), recent = newest first, breaking = only high priority */
+  const [newsSort, setNewsSort] = useState<'priority' | 'recent' | 'breaking'>('priority');
   const [tweetTab, setTweetTab] = useState<string>('draft');
   const [fetchingNews, setFetchingNews] = useState(false);
   const [generatingId, setGeneratingId] = useState<number | null>(null);
   const [message, setMessage] = useState('');
   const [backendOnline, setBackendOnline] = useState<boolean | null>(null);
+  
+  // Batch selection state
+  const [batchMode, setBatchMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
+  const [batchLoading, setBatchLoading] = useState(false);
+
+  // Advanced filters
+  const [filters, setFilters] = useState<FilterState>({
+    keyword: '',
+    source: '',
+    days: null,
+    processed: null,
+  });
+
+  // Analytics view toggle
+  const [showAnalytics, setShowAnalytics] = useState(false);
+  
+  // WebSocket for real-time stats
+  const wsRef = useRef<WebSocket | null>(null);
 
   const showMessage = (msg: string) => {
     setMessage(msg);
@@ -35,23 +60,86 @@ export default function Home() {
     }
   }, []);
 
-  const loadArticles = useCallback(async (category = 'all') => {
+  // WebSocket connection for real-time updates
+  useEffect(() => {
+    const connectWebSocket = () => {
+      try {
+        wsRef.current = new WebSocket(`${WS_BASE}/api/tweets/ws/stats`);
+        
+        wsRef.current.onopen = () => {
+          console.log('WebSocket connected');
+          // Send initial ping to get stats
+          wsRef.current?.send('ping');
+          // Request stats every 5 seconds
+          const interval = setInterval(() => {
+            if (wsRef.current?.readyState === WebSocket.OPEN) {
+              wsRef.current.send('ping');
+            }
+          }, 5000);
+          return () => clearInterval(interval);
+        };
+        
+        wsRef.current.onmessage = (event) => {
+          try {
+            const data = JSON.parse(event.data);
+            setStats(data);
+          } catch (e) {
+            console.error('Failed to parse WebSocket message:', e);
+          }
+        };
+        
+        wsRef.current.onerror = () => {
+          console.log('WebSocket error, falling back to HTTP polling');
+          // Fallback to HTTP polling
+          loadStats();
+        };
+        
+        wsRef.current.onclose = () => {
+          console.log('WebSocket closed');
+          // Retry connection after 3 seconds
+          setTimeout(connectWebSocket, 3000);
+        };
+      } catch (e) {
+        console.log('WebSocket connection failed, using HTTP polling:', e);
+        loadStats();
+      }
+    };
+
+    connectWebSocket();
+
+    return () => {
+      if (wsRef.current) {
+        wsRef.current.close();
+      }
+    };
+  }, [loadStats]);
+
+  const loadArticles = useCallback(async (category = 'all', sort = newsSort) => {
     try {
-      const url =
-        category === 'all'
-          ? `${API_BASE}/api/news/`
-          : `${API_BASE}/api/news/?category=${category}`;
+      let url = `${API_BASE}/api/news/?limit=200&sort=${sort}`;
+      if (category !== 'all') url += `&category=${category}`;
+      if (filters.keyword) url += `&keyword=${encodeURIComponent(filters.keyword)}`;
+      if (filters.source) url += `&source=${encodeURIComponent(filters.source)}`;
+      if (filters.days) url += `&days=${filters.days}`;
+      if (filters.processed !== null) url += `&processed=${filters.processed}`;
+
       const res = await fetch(url);
-      if (res.ok) setArticles(await res.json());
+      if (res.ok) {
+        const data = await res.json();
+        setArticles(data.articles || data);
+      }
     } catch {
       /* backend offline */
     }
-  }, []);
+  }, [filters, newsSort]);
 
   const loadDrafts = useCallback(async (status: string) => {
     try {
       const res = await fetch(`${API_BASE}/api/tweets/?status=${status}`);
-      if (res.ok) setDrafts(await res.json());
+      if (res.ok) {
+        const data = await res.json();
+        setDrafts(Array.isArray(data) ? data : data.drafts || []);
+      }
     } catch {
       /* backend offline */
     }
@@ -66,6 +154,7 @@ export default function Home() {
   const handleFetchNews = async () => {
     setFetchingNews(true);
     try {
+      // Always pull general + all sports feeds so every category tab is populated
       const res = await fetch(`${API_BASE}/api/news/fetch?category=all`);
       const data = await res.json();
       showMessage(data.message);
@@ -85,7 +174,7 @@ export default function Home() {
         method: 'POST',
       });
       if (res.ok) {
-        showMessage('Tweet draft generated!');
+        showMessage('Tweet draft generated! You can tweet this news again anytime.');
         setTweetTab('draft');
         await loadDrafts('draft');
         await loadStats();
@@ -109,11 +198,62 @@ export default function Home() {
   const handleTweetTabChange = (tab: string) => {
     setTweetTab(tab);
     loadDrafts(tab);
+    setSelectedIds(new Set()); // Clear selections when switching tabs
   };
 
   const handleDraftUpdate = async () => {
     await loadDrafts(tweetTab);
     await loadStats();
+  };
+
+  // Batch selection handlers
+  const toggleSelection = (id: number) => {
+    const newSelected = new Set(selectedIds);
+    if (newSelected.has(id)) {
+      newSelected.delete(id);
+    } else {
+      newSelected.add(id);
+    }
+    setSelectedIds(newSelected);
+  };
+
+  const selectAll = () => {
+    if (selectedIds.size === drafts.length) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(drafts.map(d => d.id)));
+    }
+  };
+
+  const handleBatchAction = async (action: 'approve' | 'reject' | 'delete') => {
+    if (selectedIds.size === 0) {
+      showMessage('No tweets selected');
+      return;
+    }
+
+    setBatchLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/api/tweets/batch/action`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ids: Array.from(selectedIds),
+          action
+        }),
+      });
+
+      if (res.ok) {
+        const data = await res.json();
+        showMessage(data.message);
+        setSelectedIds(new Set());
+        await loadDrafts(tweetTab);
+        await loadStats();
+      }
+    } catch (err) {
+      showMessage('Failed to perform batch action');
+    } finally {
+      setBatchLoading(false);
+    }
   };
 
   return (
@@ -139,13 +279,26 @@ export default function Home() {
               </span>
             )}
           </div>
-          <button
-            onClick={handleFetchNews}
-            disabled={fetchingNews}
-            className="bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
-          >
-            {fetchingNews ? '⏳ Fetching...' : '🔄 Fetch Latest News'}
-          </button>
+          <div className="flex items-center gap-3">
+            <button
+              onClick={handleFetchNews}
+              disabled={fetchingNews}
+              className="bg-blue-600 hover:bg-blue-500 disabled:bg-gray-700 disabled:text-gray-500 disabled:cursor-not-allowed text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
+            >
+              {fetchingNews ? '⏳ Fetching...' : '🔄 Fetch Latest News'}
+            </button>
+            <button
+              onClick={() => setShowAnalytics(!showAnalytics)}
+              className={`px-4 py-2 rounded-lg text-sm font-semibold transition-colors ${
+                showAnalytics
+                  ? 'bg-purple-600 hover:bg-purple-500 text-white'
+                  : 'bg-gray-700 hover:bg-gray-600 text-gray-300'
+              }`}
+            >
+              📊 Analytics
+            </button>
+            <ThemeToggle />
+          </div>
         </div>
       </header>
 
@@ -179,17 +332,65 @@ export default function Home() {
         </div>
       )}
 
+      {/* Analytics Dashboard */}
+      {showAnalytics && (
+        <div className="max-w-7xl mx-auto px-6 py-6 border-b border-gray-800">
+          <AnalyticsDashboard apiBase={API_BASE} />
+        </div>
+      )}
+
       {/* Main Layout */}
       <main className="max-w-7xl mx-auto px-6 py-6">
+        {/* Advanced Filters */}
+        <div className="mb-6">
+          <AdvancedFilters onFilterChange={(newFilters) => {
+            setFilters(newFilters);
+            loadArticles(categoryFilter);
+          }} />
+        </div>
+
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
           {/* Left: News Feed (3/5) */}
           <div className="lg:col-span-3">
-            <div className="mb-3">
-              <h2 className="font-semibold text-gray-200 mb-2">
+            <div className="flex items-center justify-between mb-3 flex-wrap gap-2">
+              <h2 className="font-semibold text-gray-200">
                 News Articles
                 <span className="ml-2 text-sm text-gray-500 font-normal">({articles.length})</span>
               </h2>
-              <SourceFilter selected={categoryFilter} onChange={handleCategoryChange} />
+              <div className="flex items-center gap-2 flex-wrap">
+                <div className="flex rounded-lg overflow-hidden border border-gray-700 text-xs">
+                  {(
+                    [
+                      { id: 'priority', label: '🔥 Priority' },
+                      { id: 'breaking', label: '🚨 Breaking' },
+                      { id: 'recent', label: '🕒 Latest' },
+                    ] as const
+                  ).map((opt) => (
+                    <button
+                      key={opt.id}
+                      onClick={() => {
+                        setNewsSort(opt.id);
+                        loadArticles(categoryFilter, opt.id);
+                      }}
+                      className={`px-2.5 py-1 font-medium transition-colors ${
+                        newsSort === opt.id
+                          ? 'bg-red-700 text-white'
+                          : 'bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200'
+                      }`}
+                      title={
+                        opt.id === 'priority'
+                          ? 'Breaking & urgent first'
+                          : opt.id === 'breaking'
+                          ? 'Only high-priority stories'
+                          : 'Newest fetch first'
+                      }
+                    >
+                      {opt.label}
+                    </button>
+                  ))}
+                </div>
+                <SourceFilter selected={categoryFilter} onChange={handleCategoryChange} />
+              </div>
             </div>
             <NewsFeed
               articles={articles}
@@ -219,7 +420,66 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="space-y-3 max-h-[calc(100vh-230px)] overflow-y-auto">
+            {/* Batch mode controls */}
+            {drafts.length > 0 && (
+              <div className="mb-3 flex items-center gap-2 flex-wrap">
+                <button
+                  onClick={() => setBatchMode(!batchMode)}
+                  className={`text-xs px-2.5 py-1 rounded-lg font-medium transition-colors ${
+                    batchMode
+                      ? 'bg-purple-700 text-white'
+                      : 'bg-gray-800 text-gray-300 hover:bg-gray-700'
+                  }`}
+                >
+                  {batchMode ? '✓ Batch ON' : '☐ Batch'}
+                </button>
+
+                {batchMode && (
+                  <>
+                    <button
+                      onClick={selectAll}
+                      className="text-xs px-2.5 py-1 bg-gray-800 text-gray-300 hover:bg-gray-700 rounded-lg font-medium transition-colors"
+                    >
+                      {selectedIds.size === drafts.length ? '☑ All' : '☐ All'}
+                    </button>
+
+                    {selectedIds.size > 0 && (
+                      <>
+                        <span className="text-xs text-gray-400 ml-auto">
+                          {selectedIds.size} selected
+                        </span>
+
+                        <button
+                          onClick={() => handleBatchAction('approve')}
+                          disabled={batchLoading}
+                          className="text-xs px-2.5 py-1 bg-green-800 hover:bg-green-700 disabled:opacity-50 text-white rounded-lg font-medium transition-colors"
+                        >
+                          ✓ Approve
+                        </button>
+
+                        <button
+                          onClick={() => handleBatchAction('reject')}
+                          disabled={batchLoading}
+                          className="text-xs px-2.5 py-1 bg-red-900 hover:bg-red-800 disabled:opacity-50 text-white rounded-lg font-medium transition-colors"
+                        >
+                          ✗ Reject
+                        </button>
+
+                        <button
+                          onClick={() => handleBatchAction('delete')}
+                          disabled={batchLoading}
+                          className="text-xs px-2.5 py-1 bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white rounded-lg font-medium transition-colors"
+                        >
+                          🗑 Delete
+                        </button>
+                      </>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
+            <div className="space-y-3 max-h-[calc(100vh-280px)] overflow-y-auto">
               {drafts.length === 0 ? (
                 <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 text-center">
                   <p className="text-gray-500 text-sm">No {tweetTab} tweets.</p>
@@ -236,6 +496,17 @@ export default function Home() {
                     draft={draft}
                     onUpdate={handleDraftUpdate}
                     apiBase={API_BASE}
+                    showCheckbox={batchMode}
+                    selected={selectedIds.has(draft.id)}
+                    onSelectChange={(selected) => {
+                      if (selected) {
+                        setSelectedIds(new Set([...Array.from(selectedIds), draft.id]));
+                      } else {
+                        const newSelected = new Set(selectedIds);
+                        newSelected.delete(draft.id);
+                        setSelectedIds(newSelected);
+                      }
+                    }}
                   />
                 ))
               )}

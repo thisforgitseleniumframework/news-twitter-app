@@ -1,0 +1,19 @@
+{
+  "terminal.integrated.profiles.windows": {
+    "Grok Agent": {
+      "path": "C:\\Users\\91973\\.grok\\bin\\grok.exe",
+      "args": [],
+      "icon": "robot",
+      "overrideName": true,
+      "color": "terminal.ansiCyan"
+    },
+    "Grok Continue": {
+      "path": "C:\\Users\\91973\\.grok\\bin\\grok.exe",
+      "args": ["-c"],
+      "icon": "debug-continue",
+      "overrideName": true,
+      "color": "terminal.ansiGreen"
+    }
+  },
+  "task.allowAutomaticTasks": "on"
+}

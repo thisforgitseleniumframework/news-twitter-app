@@ -7,6 +7,8 @@ backend/**/*.pyc
 backend/news_twitter.db
 backend/venv/
 backend/.venv/
+backend/media/
+backend/.x_browser_profile/
 
 # Node.js / Next.js
 frontend/node_modules/
