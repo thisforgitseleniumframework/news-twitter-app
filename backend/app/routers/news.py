@@ -1,3 +1,5 @@
+import json
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from sqlalchemy import func
@@ -6,9 +8,22 @@ from datetime import datetime, timedelta
 
 from app.database import get_db
 from app.models import NewsArticle, TweetDraft
+from app.services.x_revenue import apply_score_to_draft_fields
 from app.services.news_fetcher import fetch_all_news, list_categories, SPORTS_CATEGORY_IDS
 from app.services.news_store import store_new_articles
-from app.services.ai_generator import generate_tweet
+from app.config import MIN_TWEET_WORDS, RELATED_SOURCES_LIMIT
+from app.services.ai_generator import (
+    format_thread_display,
+    generate_thread,
+    should_use_thread,
+    word_count,
+)
+from app.services.rulebook_engine import generate_rulebook_packet
+from app.services.related_news import (
+    filter_related_payload,
+    find_related_articles,
+    sources_briefing,
+)
 from app.services.media_downloader import media_public_url
 from app.services.news_priority import score_article
 
@@ -62,7 +77,7 @@ def get_news(
     days: Optional[int] = None,
     processed: Optional[bool] = None,
     sort: str = Query(
-        "priority",
+        "recent",
         description="priority (breaking first) | recent | breaking (only high-priority)",
     ),
     limit: int = 100,
@@ -175,9 +190,20 @@ def get_categories(db: Session = Depends(get_db)):
 
 
 @router.post("/{article_id}/generate-tweet")
-def generate_tweet_for_article(article_id: int, db: Session = Depends(get_db)):
+def generate_tweet_for_article(
+    article_id: int,
+    format: str = Query(
+        "single",
+        description="single | thread | auto — default single (never force threads without choice)",
+    ),
+    db: Session = Depends(get_db),
+):
     """
-    Generate an AI tweet draft for a specific article using Gemini.
+    Generate an AI tweet or thread draft for a specific article using Gemini.
+
+    format=single (default): one long-form post (250–500 words, multi-source).
+    format=thread: 2–3 short tweets.
+    format=auto: may pick thread only for breaking/high-priority/sports (optional).
 
     The same article can be used any number of times — each click creates a
     new draft. is_processed is set True as a soft “used before” flag only.
@@ -186,27 +212,141 @@ def generate_tweet_for_article(article_id: int, db: Session = Depends(get_db)):
     if not article:
         raise HTTPException(status_code=404, detail="Article not found")
 
-    tweet_text = generate_tweet(
-        title=article.title,
-        summary=article.summary or "",
-        source=article.source,
-        category=article.category,
+    fmt = (format or "single").strip().lower()
+    if fmt not in ("auto", "single", "thread"):
+        raise HTTPException(status_code=400, detail="format must be auto, single, or thread")
+
+    priority = score_article(article)
+    # Only thread when explicitly requested (or opt-in auto). Never force without choice.
+    use_thread = fmt == "thread" or (
+        fmt == "auto"
+        and should_use_thread(
+            category=article.category,
+            is_breaking=bool(priority.get("is_breaking")),
+            priority_score=int(priority.get("priority_score") or 0),
+        )
     )
 
-    draft = TweetDraft(
-        article_id=article.id,
-        article_title=article.title,
-        article_url=article.url,
-        tweet_text=tweet_text,
-        source=article.source,
-        category=article.category,
-        status="draft",
-        media_path=article.media_path,
-        media_type=article.media_type,
-        attach_media=bool(article.media_path),
-    )
+    # Multi-source OFF by default (RELATED_SOURCES_LIMIT=0) to prevent sports mashups.
+    # When limit > 0, only strict same-story matches are used as research notes.
+    related = []
+    related_payload = []
+    if RELATED_SOURCES_LIMIT > 0:
+        related = find_related_articles(
+            db, article, limit=min(2, RELATED_SOURCES_LIMIT)
+        )
+        briefing_all = sources_briefing(article, related)
+        related_payload = filter_related_payload(
+            article.title or "",
+            article.summary or "",
+            briefing_all[1:],
+        )
+        related = [
+            r
+            for r in related
+            if any(
+                (p.get("title") == r.title and p.get("source") == r.source)
+                for p in related_payload
+            )
+        ]
+    briefing = sources_briefing(article, related)
+
+    thread_parts_out = None
+    rulebook_packet = None
+    if use_thread:
+        parts = generate_thread(
+            title=article.title,
+            summary=article.summary or "",
+            source=article.source or "",
+            category=article.category or "news",
+        )
+        thread_parts_out = parts
+        tweet_text = format_thread_display(parts)
+        draft = TweetDraft(
+            article_id=article.id,
+            article_title=article.title,
+            article_url=article.url,
+            tweet_text=tweet_text,
+            is_thread=True,
+            thread_parts=json.dumps(parts, ensure_ascii=False),
+            source=article.source,
+            category=article.category,
+            status="draft",
+            media_path=article.media_path,
+            media_type=article.media_type,
+            attach_media=bool(article.media_path),
+        )
+    else:
+        # Master Rulebook pipeline (§17): Hidden Story → Best Tweet → Alternative
+        rulebook_packet = generate_rulebook_packet(
+            title=article.title or "",
+            summary=article.summary or "",
+            source=article.source or "",
+            category=article.category or "news",
+            related_sources=related_payload,
+        )
+        tweet_text = (rulebook_packet.get("best_tweet") or "").strip()
+        draft = TweetDraft(
+            article_id=article.id,
+            article_title=article.title,
+            article_url=article.url,
+            tweet_text=tweet_text,
+            is_thread=False,
+            thread_parts=None,
+            source=article.source,
+            category=article.category,
+            status="draft",
+            media_path=article.media_path,
+            media_type=article.media_type,
+            attach_media=bool(article.media_path),
+            rulebook_meta=json.dumps(
+                {
+                    "hidden_story": rulebook_packet.get("hidden_story"),
+                    "verified_context": rulebook_packet.get("verified_context"),
+                    "uncertain": rulebook_packet.get("uncertain"),
+                    "alternative_tweet": rulebook_packet.get("alternative_tweet"),
+                    "hashtags": rulebook_packet.get("hashtags"),
+                    "sources": rulebook_packet.get("sources"),
+                    "mode": rulebook_packet.get("mode"),
+                },
+                ensure_ascii=False,
+            ),
+        )
+
+    apply_score_to_draft_fields(draft)
     db.add(draft)
     article.is_processed = True  # soft flag only — does not block re-use
     db.commit()
     db.refresh(draft)
-    return draft
+    payload = {
+        "id": draft.id,
+        "article_id": draft.article_id,
+        "tweet_text": draft.tweet_text,
+        "is_thread": bool(draft.is_thread),
+        "thread_parts": thread_parts_out,
+        "status": draft.status,
+        "revenue_score": draft.revenue_score,
+        "revenue_grade": draft.revenue_grade,
+        "revenue_tips": draft.revenue_tips,
+        "format": "thread" if use_thread else "single",
+        "word_count": word_count(draft.tweet_text or ""),
+        "min_words": MIN_TWEET_WORDS,
+        "sources_used": len(briefing),
+        "related_sources": [
+            {"source": r.source, "title": r.title, "id": r.id} for r in related
+        ],
+        "priority_score": priority.get("priority_score"),
+        "is_breaking": priority.get("is_breaking"),
+    }
+    # Master Rulebook §17 fields (single-post path)
+    if rulebook_packet:
+        payload["rulebook"] = True
+        payload["hidden_story"] = rulebook_packet.get("hidden_story")
+        payload["verified_context"] = rulebook_packet.get("verified_context")
+        payload["uncertain"] = rulebook_packet.get("uncertain")
+        payload["best_tweet"] = rulebook_packet.get("best_tweet")
+        payload["alternative_tweet"] = rulebook_packet.get("alternative_tweet")
+        payload["hashtags"] = rulebook_packet.get("hashtags")
+        payload["sources"] = rulebook_packet.get("sources")
+        payload["rulebook_mode"] = rulebook_packet.get("mode")
+    return payload

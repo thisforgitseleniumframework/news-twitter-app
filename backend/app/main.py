@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.database import engine, Base, get_db
 from app.models import NewsArticle, TweetDraft
-from app.routers import news, tweets
+from app.routers import news, tweets, trends
 from app.scheduler import start_scheduler
 from app.services.media_downloader import MEDIA_DIR
 
@@ -36,6 +36,12 @@ def _migrate_schema():
             ("media_path", "VARCHAR(500)"),
             ("media_type", "VARCHAR(20)"),
             ("attach_media", "BOOLEAN DEFAULT 1"),
+            ("is_thread", "BOOLEAN DEFAULT 0"),
+            ("thread_parts", "TEXT"),
+            ("revenue_score", "INTEGER"),
+            ("revenue_grade", "VARCHAR(8)"),
+            ("revenue_tips", "TEXT"),
+            ("rulebook_meta", "TEXT"),
         ],
     }
     with engine.begin() as conn:
@@ -63,8 +69,8 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="NewsPost API",
-    description="Fetch news from global & India sources and generate tweet drafts",
-    version="1.0.0",
+    description="Fetch news from global & India sources and generate tweet drafts optimized for X Creator Revenue Sharing",
+    version="1.1.0",
     lifespan=lifespan,
 )
 
@@ -82,6 +88,7 @@ app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
 
 app.include_router(news.router)
 app.include_router(tweets.router)
+app.include_router(trends.router)
 
 
 @app.get("/")

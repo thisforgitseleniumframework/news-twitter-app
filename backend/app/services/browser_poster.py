@@ -10,25 +10,27 @@ Use at your own risk — automated browser use may violate X's terms of service.
 from __future__ import annotations
 
 import threading
-from pathlib import Path
 from typing import Optional
 
 from app.config import MAX_TWEET_LENGTH
 from app.services.media_downloader import absolute_media_path
+from app.services.x_browser_common import (
+    profile_dir,
+    release as release_browser,
+    try_acquire,
+    is_browser_busy,
+)
 
-# Persistent profile so login session survives across posts
-PROFILE_DIR = Path(__file__).resolve().parent.parent.parent / ".x_browser_profile"
 COMPOSE_URL = "https://x.com/compose/post"
 
 # Keep browser open long enough for the user to review & click Post
 BROWSER_IDLE_MS = 30 * 60 * 1000  # 30 minutes
 
 _lock = threading.Lock()
-_active = False
 
 
 def is_browser_session_busy() -> bool:
-    return _active
+    return is_browser_busy()
 
 
 def prepare_tweet_text(tweet_text: str, article_url: Optional[str] = None) -> str:
@@ -54,16 +56,9 @@ def open_compose_for_review(
 
     Returns immediately; browser runs in a background thread.
     """
-    global _active
-
-    if _active:
-        return {
-            "success": False,
-            "error": (
-                "A browser post session is already open. "
-                "Finish or close that window, then try again."
-            ),
-        }
+    busy = try_acquire("browser post")
+    if busy:
+        return {"success": False, "error": busy}
 
     full_text = prepare_tweet_text(tweet_text, article_url)
     media_path = None
@@ -71,16 +66,12 @@ def open_compose_for_review(
         media_path = absolute_media_path(media_filename)
 
     def _run():
-        global _active
-        _active = True
         try:
             from playwright.sync_api import sync_playwright, TimeoutError as PwTimeout
 
-            PROFILE_DIR.mkdir(parents=True, exist_ok=True)
-
             with sync_playwright() as p:
                 context = p.chromium.launch_persistent_context(
-                    user_data_dir=str(PROFILE_DIR),
+                    user_data_dir=str(profile_dir()),
                     headless=False,
                     viewport={"width": 1100, "height": 800},
                     args=["--disable-blink-features=AutomationControlled"],
@@ -147,21 +138,17 @@ def open_compose_for_review(
         except Exception as e:
             print(f"[BrowserPoster] Error: {e}")
         finally:
-            _active = False
+            release_browser()
 
     # Serialize launches lightly
     if not _lock.acquire(blocking=False):
+        release_browser()
         return {
             "success": False,
             "error": "Another browser post is starting. Wait a moment and retry.",
         }
 
     try:
-        if _active:
-            return {
-                "success": False,
-                "error": "A browser post session is already open.",
-            }
         thread = threading.Thread(target=_run, daemon=True, name="x-browser-poster")
         thread.start()
     finally:

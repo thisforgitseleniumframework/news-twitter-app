@@ -6,43 +6,41 @@ export default function ThemeToggle() {
   const [isDark, setIsDark] = useState(true);
 
   useEffect(() => {
-    // Check for saved preference or system preference
     const saved = localStorage.getItem('theme');
     const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-    const isDarkMode = saved ? saved === 'dark' : prefersDark;
-    setIsDark(isDarkMode);
-    applyTheme(isDarkMode);
+    const dark = saved ? saved === 'dark' : prefersDark;
+    setIsDark(dark);
+    applyTheme(dark);
   }, []);
 
-  const applyTheme = (isDarkMode: boolean) => {
+  const applyTheme = (dark: boolean) => {
     const html = document.documentElement;
-    if (isDarkMode) {
+    if (dark) {
       html.classList.add('dark');
+      html.classList.remove('light');
       html.style.colorScheme = 'dark';
     } else {
+      html.classList.add('light');
       html.classList.remove('dark');
       html.style.colorScheme = 'light';
     }
-    localStorage.setItem('theme', isDarkMode ? 'dark' : 'light');
+    localStorage.setItem('theme', dark ? 'dark' : 'light');
   };
 
   const toggleTheme = () => {
-    const newIsDark = !isDark;
-    setIsDark(newIsDark);
-    applyTheme(newIsDark);
+    const next = !isDark;
+    setIsDark(next);
+    applyTheme(next);
   };
 
   return (
     <button
+      type="button"
       onClick={toggleTheme}
-      className="relative inline-flex items-center justify-center w-10 h-10 rounded-lg bg-gray-800 hover:bg-gray-700 transition-colors"
-      title={isDark ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+      className="inline-flex h-10 w-10 items-center justify-center rounded-xl border border-gray-700 bg-gray-900/80 text-lg hover:border-sky-600/50 hover:bg-sky-500/10 transition-colors"
+      title={isDark ? 'Switch to light mode' : 'Switch to dark mode'}
     >
-      {isDark ? (
-        <span className="text-lg">☀️</span>
-      ) : (
-        <span className="text-lg">🌙</span>
-      )}
+      {isDark ? '☀️' : '🌙'}
     </button>
   );
 }
