@@ -31,6 +31,9 @@ class TweetDraft(Base):
     article_title = Column(String(500))
     article_url = Column(String(1000))
     tweet_text = Column(Text)  # Premium long posts up to MAX_TWEET_LENGTH
+    # When True, tweet_text is a numbered join of thread_parts for display/search
+    is_thread = Column(Boolean, default=False)
+    thread_parts = Column(Text, nullable=True)  # JSON array of strings (2–3 tweets)
     source = Column(String(100))
     category = Column(String(50))
     status = Column(String(20), default="draft")  # draft | approved | posted | rejected | scheduled
@@ -43,3 +46,9 @@ class TweetDraft(Base):
     media_path = Column(String(500), nullable=True)
     media_type = Column(String(20), nullable=True)  # "image" | "video"
     attach_media = Column(Boolean, default=True)
+    # X Creator Revenue Sharing — content fit (0–100), letter grade, JSON tips
+    revenue_score = Column(Integer, nullable=True)
+    revenue_grade = Column(String(8), nullable=True)
+    revenue_tips = Column(Text, nullable=True)
+    # Master Rulebook §17 packet JSON (hidden_story, alternative_tweet, etc.)
+    rulebook_meta = Column(Text, nullable=True)

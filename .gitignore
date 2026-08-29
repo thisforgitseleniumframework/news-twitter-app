@@ -9,11 +9,13 @@ backend/venv/
 backend/.venv/
 backend/media/
 backend/.x_browser_profile/
+backend/.trends_cache.json
 
 # Node.js / Next.js
 frontend/node_modules/
 frontend/.next/
 frontend/out/
+frontend/tsconfig.tsbuildinfo
 
 # General
 .DS_Store
